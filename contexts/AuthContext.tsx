@@ -1,10 +1,27 @@
+// contexts/AuthContext.tsx
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import auth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
-import firestore from '@react-native-firebase/firestore';
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  User,
+} from 'firebase/auth';
+import {
+  doc,
+  setDoc,
+  onSnapshot,
+  collection,
+  query,
+  where,
+  getDocs,
+} from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 import { UserDoc } from '../models/types';
 
 interface AuthContextValue {
-  user: FirebaseAuthTypes.User | null;
+  user: User | null;
   userDoc: UserDoc | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
@@ -23,13 +40,13 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<FirebaseAuthTypes.User | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [userDoc, setUserDoc] = useState<UserDoc | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Listen to Firebase auth state
   useEffect(() => {
-    const unsubscribe = auth().onAuthStateChanged((firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       if (!firebaseUser) {
         setUserDoc(null);
@@ -43,23 +60,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) return;
 
-    const unsubscribe = firestore()
-      .collection('users')
-      .doc(user.uid)
-      .onSnapshot(
-        (snap) => {
-          setUserDoc(snap.exists ? (snap.data() as UserDoc) : null);
-          setLoading(false);
-        },
-        () => {
-          setLoading(false);
-        },
-      );
+    const unsubscribe = onSnapshot(
+      doc(db, 'users', user.uid),
+      (snap) => {
+        setUserDoc(snap.exists() ? (snap.data() as UserDoc) : null);
+        setLoading(false);
+      },
+      () => {
+        setLoading(false);
+      },
+    );
     return unsubscribe;
   }, [user]);
 
   async function login(email: string, password: string): Promise<void> {
-    await auth().signInWithEmailAndPassword(email, password);
+    await signInWithEmailAndPassword(auth, email, password);
   }
 
   async function register(
@@ -71,16 +86,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     color: string,
   ): Promise<void> {
     // Check username uniqueness
-    const existing = await firestore()
-      .collection('users')
-      .where('username', '==', username.toLowerCase().trim())
-      .get();
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('username', '==', username.toLowerCase().trim()));
+    const existing = await getDocs(q);
     if (!existing.empty) {
       throw new Error('That username is already taken.');
     }
 
     // Create Firebase Auth account
-    const cred = await auth().createUserWithEmailAndPassword(email, password);
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
     const uid = cred.user.uid;
 
     // Write Firestore user profile
@@ -92,15 +106,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       color,
       createdAt: Date.now(),
     };
-    await firestore().collection('users').doc(uid).set(newUserDoc);
+    await setDoc(doc(db, 'users', uid), newUserDoc);
   }
 
   async function logout(): Promise<void> {
-    await auth().signOut();
+    await signOut(auth);
   }
 
   async function resetPassword(email: string): Promise<void> {
-    await auth().sendPasswordResetEmail(email);
+    await sendPasswordResetEmail(auth, email);
   }
 
   return (
